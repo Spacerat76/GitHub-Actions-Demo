@@ -1,5 +1,7 @@
 package com.example.demo;
 
+import java.util.Locale;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,7 +33,7 @@ public class DemoController {
 	@PostMapping("/echo")
 	public EchoResponse echo(@RequestBody EchoRequest request) {
 		String message = request.message() == null ? "" : request.message();
-		return new EchoResponse(message, message.toUpperCase(), message.length());
+		return new EchoResponse(message, message.toUpperCase(Locale.ROOT), message.length());
 	}
 
 	public record GreetingResponse(String message, String application) {

@@ -50,6 +50,54 @@ jobs:
         shell: cmd
         run: mvnw.cmd --batch-mode verify
 
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Run static quality checks
+        run: |
+          chmod +x mvnw
+          ./mvnw --batch-mode -DskipTests compile pmd:pmd spotbugs:spotbugs pmd:check spotbugs:check
+
+      - name: Publish quality summary
+        if: always()
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          def pmd_violations(path):
+              if not path.exists():
+                  return 'n/a'
+              root = ET.parse(path).getroot()
+              return str(len(root.findall('.//violation')))
+
+          def spotbugs_violations(path):
+              if not path.exists():
+                  return 'n/a'
+              root = ET.parse(path).getroot()
+              return root.attrib.get('total_bugs', '0')
+
+          summary = Path(__import__('os').environ['GITHUB_STEP_SUMMARY'])
+          with summary.open('a', encoding='utf-8') as handle:
+              handle.write('## Static Quality Checks\n\n')
+              handle.write('| Tool | Findings |\n')
+              handle.write('| --- | ---: |\n')
+              handle.write(f'| PMD | {pmd_violations(Path("target/pmd.xml"))} |\n')
+              handle.write(f'| SpotBugs | {spotbugs_violations(Path("target/spotbugsXml.xml"))} |\n')
+          PY
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
