@@ -89,19 +89,19 @@ jobs:
 
           line_ratio = ratio('LINE')
           branch_ratio = ratio('BRANCH')
-      line_min = float(os.environ['COVERAGE_LINE_MIN'])
-      branch_min = float(os.environ['COVERAGE_BRANCH_MIN'])
+          line_min = float(os.environ['COVERAGE_LINE_MIN'])
+          branch_min = float(os.environ['COVERAGE_BRANCH_MIN'])
 
           summary = os.environ['GITHUB_STEP_SUMMARY']
           with open(summary, 'a', encoding='utf-8') as handle:
               handle.write('## Code Coverage\n\n')
-        handle.write('| Metric | Coverage | Minimum |\n')
-        handle.write('| --- | ---: | ---: |\n')
-        handle.write(f'| Line | {line_ratio:.2%} | {line_min:.0%} |\n')
-        handle.write(f'| Branch | {branch_ratio:.2%} | {branch_min:.0%} |\n')
+              handle.write('| Metric | Coverage | Minimum |\n')
+              handle.write('| --- | ---: | ---: |\n')
+              handle.write(f'| Line | {line_ratio:.2%} | {line_min:.0%} |\n')
+              handle.write(f'| Branch | {branch_ratio:.2%} | {branch_min:.0%} |\n')
 
-      if line_ratio < line_min or branch_ratio < branch_min:
-        raise SystemExit(
-          f'Coverage threshold not met: line={line_ratio:.2%}, branch={branch_ratio:.2%}'
-        )
+          if line_ratio < line_min or branch_ratio < branch_min:
+              raise SystemExit(
+                  f'Coverage threshold not met: line={line_ratio:.2%}, branch={branch_ratio:.2%}'
+              )
           PY
