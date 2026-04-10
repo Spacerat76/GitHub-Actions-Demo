@@ -32,6 +32,14 @@ class DemoAppApplicationTests {
 	}
 
 	@Test
+	void helloEndpointUsesDefaultNameWhenMissing() throws Exception {
+		mockMvc.perform(get("/api/hello"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.message").value("Hello, World!"))
+			.andExpect(jsonPath("$.application").value("demo-app"));
+	}
+
+	@Test
 	void statusEndpointReturnsApplicationStatus() throws Exception {
 		mockMvc.perform(get("/api/status"))
 			.andExpect(status().isOk())
@@ -51,6 +59,19 @@ class DemoAppApplicationTests {
 			.andExpect(jsonPath("$.original").value("build and test"))
 			.andExpect(jsonPath("$.uppercase").value("BUILD AND TEST"))
 			.andExpect(jsonPath("$.length").value(14));
+	}
+
+	@Test
+	void echoEndpointHandlesNullMessage() throws Exception {
+		mockMvc.perform(post("/api/echo")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"message":null}
+					"""))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.original").value(""))
+			.andExpect(jsonPath("$.uppercase").value(""))
+			.andExpect(jsonPath("$.length").value(0));
 	}
 
 }
