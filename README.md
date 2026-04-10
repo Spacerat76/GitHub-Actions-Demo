@@ -2,7 +2,7 @@
 
 [![Maven CI](https://github.com/Spacerat76/GitHub-Actions-Demo/actions/workflows/maven.yml/badge.svg)](https://github.com/Spacerat76/GitHub-Actions-Demo/actions/workflows/maven.yml)
 
-Kleine Demo-Anwendung zum Ausprobieren von GitHub Actions fuer Build und Tests.
+Kleine Demo-Anwendung zum Ausprobieren von GitHub Actions fuer Build, Tests, Qualitaets- und Security-Checks.
 
 Verwendete Basis:
 
@@ -15,13 +15,22 @@ Verwendete Basis:
 Dieses Repository nutzt mehrere GitHub-Actions-Checks als schlanken Ersatz fuer ein groesseres SonarQube-Setup:
 
 - `build (ubuntu-latest)` und `build (windows-latest)` bauen und testen die Anwendung auf beiden Plattformen.
-- `coverage` erzeugt JaCoCo-Coverage, prueft Gesamt- und Diff-Coverage fuer geaenderten Code und kommentiert die Werte in Pull Requests.
+- `coverage` erzeugt JaCoCo-Coverage, prueft mindestens 90% Line-Coverage, 80% Branch-Coverage und 90% Diff-Coverage auf geaenderten ausfuehrbaren Zeilen in Pull Requests.
 - `quality` fuehrt Checkstyle, PMD und SpotBugs aus. In Pull Requests blockieren nur neue Findings gegen den Basis-Branch.
-- `dependency-review` prueft neu eingefuehrte Abhaengigkeiten auf bekannte Risiken.
-- Dependabot erstellt regelmaessig Update-Pull-Requests fuer Maven-Abhaengigkeiten und GitHub Actions.
+- `dependency-review` prueft neu eingefuehrte Abhaengigkeiten auf bekannte Risiken und bekannte Sicherheitsprobleme.
+- Dependabot erstellt regelmaessig Update-Pull-Requests fuer Maven-Abhaengigkeiten und GitHub Actions. Dependabot Security Updates fuer bekannte Sicherheitsluecken sind ebenfalls aktiviert.
 - `analyze (java-kotlin)` fuehrt CodeQL aus und sucht nach Security- und Dataflow-Problemen.
 
-Alle diese Checks sind fuer Pull Requests nach `main` als Pflicht-Checks hinterlegt.
+Alle diese Checks sind fuer Pull Requests nach `main` als Pflicht-Checks hinterlegt. Fuer `main` ist ausserdem Branch Protection mit mindestens einem Review aktiv.
+
+## Pull-Request-Feedback
+
+Pull Requests erhalten sticky Kommentare direkt von GitHub Actions, damit die wichtigsten Ergebnisse ohne Oeffnen einzelner Workflow-Runs sichtbar bleiben:
+
+- `coverage` kommentiert PR- und Basis-Branch-Coverage, Deltas und die Diff-Coverage der geaenderten ausfuehrbaren Zeilen.
+- `quality` kommentiert Checkstyle-, PMD- und SpotBugs-Ergebnisse und blockiert nur neue Findings.
+- `dependency-review` kommentiert, ob neue Abhaengigkeiten unkritisch sind oder Risiken mitbringen.
+- `CodeQL` kommentiert den Status der Security-Analyse fuer den Pull Request.
 
 ## REST APIs
 
