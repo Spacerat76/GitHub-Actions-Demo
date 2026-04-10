@@ -13,8 +13,16 @@ permissions:
 
 jobs:
   build:
-    name: build
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+        java-version:
+          - '21'
 
     steps:
       - name: Check out repository
@@ -24,10 +32,16 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: ${{ matrix.java-version }}
           cache: maven
 
-      - name: Build and test with Maven Wrapper
+      - name: Build and test with Maven Wrapper on Unix
+        if: runner.os != 'Windows'
         run: |
           chmod +x mvnw
           ./mvnw --batch-mode verify
+
+      - name: Build and test with Maven Wrapper on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: mvnw.cmd --batch-mode verify
