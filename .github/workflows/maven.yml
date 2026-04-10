@@ -73,28 +73,55 @@ jobs:
           chmod +x mvnw
           ./mvnw --batch-mode verify
 
+      - name: Check out base branch for coverage comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Generate base branch coverage report
+        if: github.event_name == 'pull_request'
+        working-directory: base
+        run: |
+          chmod +x mvnw
+          ./mvnw --batch-mode verify
+
       - name: Extract coverage metrics
         id: coverage_metrics
         run: |
           python3 <<'PY'
           import os
           import xml.etree.ElementTree as ET
+          from pathlib import Path
 
-          report = ET.parse('target/site/jacoco/jacoco.xml').getroot()
-          counters = {
-              counter.attrib['type']: (int(counter.attrib['missed']), int(counter.attrib['covered']))
-              for counter in report.findall('counter')
-          }
+          def read_ratios(report_path):
+              report = ET.parse(report_path).getroot()
+              counters = {
+                  counter.attrib['type']: (int(counter.attrib['missed']), int(counter.attrib['covered']))
+                  for counter in report.findall('counter')
+              }
 
-          def ratio(counter_name):
-              missed, covered = counters[counter_name]
-              total = missed + covered
-              return 0.0 if total == 0 else covered / total
+              def ratio(counter_name):
+                  missed, covered = counters[counter_name]
+                  total = missed + covered
+                  return 0.0 if total == 0 else covered / total
 
-          line_ratio = ratio('LINE')
-          branch_ratio = ratio('BRANCH')
+              return ratio('LINE'), ratio('BRANCH')
+
+          def format_pp(delta):
+              return f'{delta * 100:+.2f} pp'
+
+          line_ratio, branch_ratio = read_ratios('target/site/jacoco/jacoco.xml')
           line_min = float(os.environ['COVERAGE_LINE_MIN'])
           branch_min = float(os.environ['COVERAGE_BRANCH_MIN'])
+          base_report_path = Path('base/target/site/jacoco/jacoco.xml')
+          base_available = base_report_path.exists()
+
+          base_line_ratio = None
+          base_branch_ratio = None
+          if base_available:
+              base_line_ratio, base_branch_ratio = read_ratios(base_report_path)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               handle.write(f'line_ratio={line_ratio:.4f}\n')
@@ -103,36 +130,71 @@ jobs:
               handle.write(f'branch_ratio_pct={branch_ratio:.2%}\n')
               handle.write(f'line_min_pct={line_min:.0%}\n')
               handle.write(f'branch_min_pct={branch_min:.0%}\n')
+              handle.write(f'base_available={str(base_available).lower()}\n')
+
+              if base_available:
+                  handle.write(f'base_line_ratio_pct={base_line_ratio:.2%}\n')
+                  handle.write(f'base_branch_ratio_pct={base_branch_ratio:.2%}\n')
+                  handle.write(f'line_delta_pp={format_pp(line_ratio - base_line_ratio)}\n')
+                  handle.write(f'branch_delta_pp={format_pp(branch_ratio - base_branch_ratio)}\n')
 
           summary = os.environ['GITHUB_STEP_SUMMARY']
           with open(summary, 'a', encoding='utf-8') as handle:
               handle.write('## Code Coverage\n\n')
-              handle.write('| Metric | Coverage | Minimum |\n')
-              handle.write('| --- | ---: | ---: |\n')
-              handle.write(f'| Line | {line_ratio:.2%} | {line_min:.0%} |\n')
-              handle.write(f'| Branch | {branch_ratio:.2%} | {branch_min:.0%} |\n')
+              if base_available:
+                  handle.write('| Metric | PR | Base | Delta | Minimum |\n')
+                  handle.write('| --- | ---: | ---: | ---: | ---: |\n')
+                  handle.write(
+                      f'| Line | {line_ratio:.2%} | {base_line_ratio:.2%} | {format_pp(line_ratio - base_line_ratio)} | {line_min:.0%} |\n'
+                  )
+                  handle.write(
+                      f'| Branch | {branch_ratio:.2%} | {base_branch_ratio:.2%} | {format_pp(branch_ratio - base_branch_ratio)} | {branch_min:.0%} |\n'
+                  )
+              else:
+                  handle.write('| Metric | Coverage | Minimum |\n')
+                  handle.write('| --- | ---: | ---: |\n')
+                  handle.write(f'| Line | {line_ratio:.2%} | {line_min:.0%} |\n')
+                  handle.write(f'| Branch | {branch_ratio:.2%} | {branch_min:.0%} |\n')
           PY
 
       - name: Comment coverage on pull request
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v9
         env:
+          BASE_AVAILABLE: ${{ steps.coverage_metrics.outputs.base_available }}
           LINE_RATIO_PCT: ${{ steps.coverage_metrics.outputs.line_ratio_pct }}
           BRANCH_RATIO_PCT: ${{ steps.coverage_metrics.outputs.branch_ratio_pct }}
+          BASE_LINE_RATIO_PCT: ${{ steps.coverage_metrics.outputs.base_line_ratio_pct }}
+          BASE_BRANCH_RATIO_PCT: ${{ steps.coverage_metrics.outputs.base_branch_ratio_pct }}
+          LINE_DELTA_PP: ${{ steps.coverage_metrics.outputs.line_delta_pp }}
+          BRANCH_DELTA_PP: ${{ steps.coverage_metrics.outputs.branch_delta_pp }}
           LINE_MIN_PCT: ${{ steps.coverage_metrics.outputs.line_min_pct }}
           BRANCH_MIN_PCT: ${{ steps.coverage_metrics.outputs.branch_min_pct }}
         with:
           script: |
             const marker = '<!-- coverage-report -->';
-            const body = [
-              marker,
-              '## Code Coverage',
-              '',
-              '| Metric | Coverage | Minimum |',
-              '| --- | ---: | ---: |',
-              `| Line | ${process.env.LINE_RATIO_PCT} | ${process.env.LINE_MIN_PCT} |`,
-              `| Branch | ${process.env.BRANCH_RATIO_PCT} | ${process.env.BRANCH_MIN_PCT} |`
-            ].join('\n');
+            const baseRef = context.payload.pull_request.base.ref;
+            const bodyLines = [marker, '## Code Coverage', ''];
+
+            if (process.env.BASE_AVAILABLE === 'true') {
+              bodyLines.push(`Compared with base branch \`${baseRef}\`.`);
+              bodyLines.push('');
+              bodyLines.push('| Metric | PR | Base | Delta | Minimum |');
+              bodyLines.push('| --- | ---: | ---: | ---: | ---: |');
+              bodyLines.push(
+                `| Line | ${process.env.LINE_RATIO_PCT} | ${process.env.BASE_LINE_RATIO_PCT} | ${process.env.LINE_DELTA_PP} | ${process.env.LINE_MIN_PCT} |`
+              );
+              bodyLines.push(
+                `| Branch | ${process.env.BRANCH_RATIO_PCT} | ${process.env.BASE_BRANCH_RATIO_PCT} | ${process.env.BRANCH_DELTA_PP} | ${process.env.BRANCH_MIN_PCT} |`
+              );
+            } else {
+              bodyLines.push('| Metric | Coverage | Minimum |');
+              bodyLines.push('| --- | ---: | ---: |');
+              bodyLines.push(`| Line | ${process.env.LINE_RATIO_PCT} | ${process.env.LINE_MIN_PCT} |`);
+              bodyLines.push(`| Branch | ${process.env.BRANCH_RATIO_PCT} | ${process.env.BRANCH_MIN_PCT} |`);
+            }
+
+            const body = bodyLines.join('\n');
 
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
