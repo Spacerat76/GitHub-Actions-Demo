@@ -22,7 +22,11 @@ public class DemoController {
 
 	@GetMapping("/hello")
 	public GreetingResponse hello(@RequestParam(defaultValue = "World") String name) {
-		return new GreetingResponse("Hello, " + name + "!", applicationName);
+		return new GreetingResponse(formatGreeting(name), applicationName);
+	}
+
+	private String formatGreeting(String name) {
+		return "Hello, " + name + "!";
 	}
 
 	@GetMapping("/status")
