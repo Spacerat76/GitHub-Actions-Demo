@@ -14,6 +14,7 @@ permissions:
 env:
   COVERAGE_LINE_MIN: '0.90'
   COVERAGE_BRANCH_MIN: '0.80'
+  COVERAGE_DIFF_LINE_MIN: '0.90'
 
 jobs:
   build:
@@ -373,37 +374,103 @@ jobs:
         id: coverage_metrics
         run: |
           python3 <<'PY'
+          import difflib
           import os
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
-          def read_ratios(report_path):
+          def read_report(report_path):
               report = ET.parse(report_path).getroot()
               counters = {
                   counter.attrib['type']: (int(counter.attrib['missed']), int(counter.attrib['covered']))
                   for counter in report.findall('counter')
               }
+            source_lines = {}
+
+            for package in report.findall('package'):
+              package_name = package.attrib.get('name', '')
+              for sourcefile in package.findall('sourcefile'):
+                relative_path = f"{package_name}/{sourcefile.attrib['name']}" if package_name else sourcefile.attrib['name']
+                source_lines[relative_path] = {
+                  int(line.attrib['nr']): {
+                    'missed_instructions': int(line.attrib.get('mi', '0')),
+                    'covered_instructions': int(line.attrib.get('ci', '0')),
+                  }
+                  for line in sourcefile.findall('line')
+                }
 
               def ratio(counter_name):
                   missed, covered = counters[counter_name]
                   total = missed + covered
                   return 0.0 if total == 0 else covered / total
 
-              return ratio('LINE'), ratio('BRANCH')
+            return ratio('LINE'), ratio('BRANCH'), source_lines
+
+          def changed_lines_against_base(current_root, base_root):
+            changed = {}
+            if not current_root.exists():
+              return changed
+
+            for current_file in current_root.rglob('*.java'):
+              relative_path = current_file.relative_to(current_root).as_posix()
+              base_file = base_root / relative_path
+              current_lines = current_file.read_text(encoding='utf-8').splitlines()
+              base_lines = base_file.read_text(encoding='utf-8').splitlines() if base_file.exists() else []
+
+              if current_lines == base_lines:
+                continue
+
+              matcher = difflib.SequenceMatcher(a=base_lines, b=current_lines, autojunk=False)
+              line_numbers = set()
+              for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+                if tag in ('replace', 'insert'):
+                  line_numbers.update(range(j1 + 1, j2 + 1))
+
+              if line_numbers:
+                changed[relative_path] = line_numbers
+
+            return changed
 
           def format_pp(delta):
               return f'{delta * 100:+.2f} pp'
 
-          line_ratio, branch_ratio = read_ratios('target/site/jacoco/jacoco.xml')
+          line_ratio, branch_ratio, source_lines = read_report('target/site/jacoco/jacoco.xml')
           line_min = float(os.environ['COVERAGE_LINE_MIN'])
           branch_min = float(os.environ['COVERAGE_BRANCH_MIN'])
+          diff_line_min = float(os.environ['COVERAGE_DIFF_LINE_MIN'])
           base_report_path = Path('base/target/site/jacoco/jacoco.xml')
           base_available = base_report_path.exists()
 
           base_line_ratio = None
           base_branch_ratio = None
           if base_available:
-              base_line_ratio, base_branch_ratio = read_ratios(base_report_path)
+            base_line_ratio, base_branch_ratio, _ = read_report(base_report_path)
+
+          diff_available = False
+          diff_ratio = None
+          diff_covered_lines = 0
+          diff_total_lines = 0
+          diff_examples = []
+          if base_available:
+            changed_lines = changed_lines_against_base(Path('src/main/java'), Path('base/src/main/java'))
+            for relative_path, line_numbers in changed_lines.items():
+              coverage_by_line = source_lines.get(relative_path, {})
+              executable_changed_lines = [
+                line_number
+                for line_number in sorted(line_numbers)
+                if line_number in coverage_by_line
+                and coverage_by_line[line_number]['missed_instructions'] + coverage_by_line[line_number]['covered_instructions'] > 0
+              ]
+              for line_number in executable_changed_lines:
+                diff_total_lines += 1
+                if coverage_by_line[line_number]['covered_instructions'] > 0:
+                  diff_covered_lines += 1
+                elif len(diff_examples) < 5:
+                  diff_examples.append(f'{relative_path}:{line_number}')
+
+            if diff_total_lines > 0:
+              diff_available = True
+              diff_ratio = diff_covered_lines / diff_total_lines
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               handle.write(f'line_ratio={line_ratio:.4f}\n')
@@ -412,7 +479,16 @@ jobs:
               handle.write(f'branch_ratio_pct={branch_ratio:.2%}\n')
               handle.write(f'line_min_pct={line_min:.0%}\n')
               handle.write(f'branch_min_pct={branch_min:.0%}\n')
+            handle.write(f'diff_min_pct={diff_line_min:.0%}\n')
               handle.write(f'base_available={str(base_available).lower()}\n')
+            handle.write(f'diff_available={str(diff_available).lower()}\n')
+            handle.write(f'diff_covered_lines={diff_covered_lines}\n')
+            handle.write(f'diff_total_lines={diff_total_lines}\n')
+            handle.write(f'diff_examples={"; ".join(diff_examples)}\n')
+
+            if diff_available and diff_ratio is not None:
+              handle.write(f'diff_ratio={diff_ratio:.4f}\n')
+              handle.write(f'diff_ratio_pct={diff_ratio:.2%}\n')
 
               if base_available:
                   handle.write(f'base_line_ratio_pct={base_line_ratio:.2%}\n')
@@ -432,6 +508,15 @@ jobs:
                   handle.write(
                       f'| Branch | {branch_ratio:.2%} | {base_branch_ratio:.2%} | {format_pp(branch_ratio - base_branch_ratio)} | {branch_min:.0%} |\n'
                   )
+                    handle.write('\n')
+                    if diff_available and diff_ratio is not None:
+                      handle.write('| Diff Metric | Coverage | Covered Lines | Total Changed Lines | Minimum |\n')
+                      handle.write('| --- | ---: | ---: | ---: | ---: |\n')
+                      handle.write(
+                        f'| Changed executable lines | {diff_ratio:.2%} | {diff_covered_lines} | {diff_total_lines} | {diff_line_min:.0%} |\n'
+                      )
+                    else:
+                      handle.write('No executable changed lines detected for diff coverage.\n')
               else:
                   handle.write('| Metric | Coverage | Minimum |\n')
                   handle.write('| --- | ---: | ---: |\n')
@@ -452,6 +537,12 @@ jobs:
           BRANCH_DELTA_PP: ${{ steps.coverage_metrics.outputs.branch_delta_pp }}
           LINE_MIN_PCT: ${{ steps.coverage_metrics.outputs.line_min_pct }}
           BRANCH_MIN_PCT: ${{ steps.coverage_metrics.outputs.branch_min_pct }}
+          DIFF_AVAILABLE: ${{ steps.coverage_metrics.outputs.diff_available }}
+          DIFF_RATIO_PCT: ${{ steps.coverage_metrics.outputs.diff_ratio_pct }}
+          DIFF_COVERED_LINES: ${{ steps.coverage_metrics.outputs.diff_covered_lines }}
+          DIFF_TOTAL_LINES: ${{ steps.coverage_metrics.outputs.diff_total_lines }}
+          DIFF_MIN_PCT: ${{ steps.coverage_metrics.outputs.diff_min_pct }}
+          DIFF_EXAMPLES: ${{ steps.coverage_metrics.outputs.diff_examples }}
         with:
           script: |
             const marker = '<!-- coverage-report -->';
@@ -469,6 +560,21 @@ jobs:
               bodyLines.push(
                 `| Branch | ${process.env.BRANCH_RATIO_PCT} | ${process.env.BASE_BRANCH_RATIO_PCT} | ${process.env.BRANCH_DELTA_PP} | ${process.env.BRANCH_MIN_PCT} |`
               );
+              bodyLines.push('');
+              if (process.env.DIFF_AVAILABLE === 'true') {
+                bodyLines.push('| Diff Metric | Coverage | Covered Lines | Total Changed Lines | Minimum |');
+                bodyLines.push('| --- | ---: | ---: | ---: | ---: |');
+                bodyLines.push(
+                  `| Changed executable lines | ${process.env.DIFF_RATIO_PCT} | ${process.env.DIFF_COVERED_LINES} | ${process.env.DIFF_TOTAL_LINES} | ${process.env.DIFF_MIN_PCT} |`
+                );
+                if (process.env.DIFF_EXAMPLES) {
+                  bodyLines.push('');
+                  bodyLines.push(`Uncovered changed lines: ${process.env.DIFF_EXAMPLES}.`);
+                }
+              } else {
+                bodyLines.push('');
+                bodyLines.push('No executable changed lines detected for diff coverage.');
+              }
             } else {
               bodyLines.push('| Metric | Coverage | Minimum |');
               bodyLines.push('| --- | ---: | ---: |');
@@ -509,12 +615,17 @@ jobs:
 
       - name: Enforce coverage thresholds
         env:
+          BASE_AVAILABLE: ${{ steps.coverage_metrics.outputs.base_available }}
+          DIFF_AVAILABLE: ${{ steps.coverage_metrics.outputs.diff_available }}
+          DIFF_RATIO: ${{ steps.coverage_metrics.outputs.diff_ratio }}
           LINE_RATIO: ${{ steps.coverage_metrics.outputs.line_ratio }}
           BRANCH_RATIO: ${{ steps.coverage_metrics.outputs.branch_ratio }}
         run: |
           python3 <<'PY'
           import os
 
+          base_available = os.environ['BASE_AVAILABLE'] == 'true'
+          diff_available = os.environ['DIFF_AVAILABLE'] == 'true'
           line_ratio = float(os.environ['LINE_RATIO'])
           branch_ratio = float(os.environ['BRANCH_RATIO'])
           line_min = float(os.environ['COVERAGE_LINE_MIN'])
@@ -523,5 +634,13 @@ jobs:
           if line_ratio < line_min or branch_ratio < branch_min:
               raise SystemExit(
                   f'Coverage threshold not met: line={line_ratio:.2%}, branch={branch_ratio:.2%}'
+              )
+
+          if base_available and diff_available:
+            diff_ratio = float(os.environ['DIFF_RATIO'])
+            diff_min = float(os.environ['COVERAGE_DIFF_LINE_MIN'])
+            if diff_ratio < diff_min:
+              raise SystemExit(
+                f'Diff coverage threshold not met: changed-lines={diff_ratio:.2%}, minimum={diff_min:.0%}'
               )
           PY
