@@ -1,5 +1,7 @@
 # Demo Spring Boot App
 
+[![Maven CI](https://github.com/Spacerat76/GitHub-Actions-Demo/actions/workflows/maven.yml/badge.svg)](https://github.com/Spacerat76/GitHub-Actions-Demo/actions/workflows/maven.yml)
+
 Kleine Demo-Anwendung zum Ausprobieren von GitHub Actions fuer Build und Tests.
 
 Verwendete Basis:
