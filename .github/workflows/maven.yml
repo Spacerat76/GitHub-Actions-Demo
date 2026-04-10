@@ -53,6 +53,9 @@ jobs:
   quality:
     name: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -230,6 +233,84 @@ jobs:
                       name = 'Checkstyle' if tool == 'checkstyle' else ('PMD' if tool == 'pmd' else 'SpotBugs')
                       handle.write(f'| {name} | {os.environ[tool.upper() + "_COUNT"]} |\n')
           PY
+
+      - name: Comment quality results on pull request
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v9
+        env:
+          BASE_AVAILABLE: ${{ steps.quality_metrics.outputs.base_available }}
+          CHECKSTYLE_COUNT: ${{ steps.quality_metrics.outputs.checkstyle_count }}
+          CHECKSTYLE_BASE_COUNT: ${{ steps.quality_metrics.outputs.checkstyle_base_count }}
+          CHECKSTYLE_NEW_COUNT: ${{ steps.quality_metrics.outputs.checkstyle_new_count }}
+          PMD_COUNT: ${{ steps.quality_metrics.outputs.pmd_count }}
+          PMD_BASE_COUNT: ${{ steps.quality_metrics.outputs.pmd_base_count }}
+          PMD_NEW_COUNT: ${{ steps.quality_metrics.outputs.pmd_new_count }}
+          SPOTBUGS_COUNT: ${{ steps.quality_metrics.outputs.spotbugs_count }}
+          SPOTBUGS_BASE_COUNT: ${{ steps.quality_metrics.outputs.spotbugs_base_count }}
+          SPOTBUGS_NEW_COUNT: ${{ steps.quality_metrics.outputs.spotbugs_new_count }}
+          TOTAL_COUNT: ${{ steps.quality_metrics.outputs.total_count }}
+          TOTAL_NEW_COUNT: ${{ steps.quality_metrics.outputs.total_new_count }}
+        with:
+          script: |
+            const marker = '<!-- quality-report -->';
+            const baseRef = context.payload.pull_request.base.ref;
+            const baseAvailable = process.env.BASE_AVAILABLE === 'true';
+            const totalNew = Number(process.env.TOTAL_NEW_COUNT || '0');
+            const totalCount = Number(process.env.TOTAL_COUNT || '0');
+            const status = baseAvailable
+              ? (totalNew === 0 ? 'Passed' : 'Failed')
+              : (totalCount === 0 ? 'Passed' : 'Failed');
+            const bodyLines = [marker, '## Static Quality Checks', '', `Status: ${status}`];
+
+            if (baseAvailable) {
+              bodyLines.push(`Compared with base branch \`${baseRef}\`.`);
+              bodyLines.push('');
+              bodyLines.push('| Tool | PR Findings | Base Findings | New Findings |');
+              bodyLines.push('| --- | ---: | ---: | ---: |');
+              bodyLines.push(`| Checkstyle | ${process.env.CHECKSTYLE_COUNT} | ${process.env.CHECKSTYLE_BASE_COUNT} | ${process.env.CHECKSTYLE_NEW_COUNT} |`);
+              bodyLines.push(`| PMD | ${process.env.PMD_COUNT} | ${process.env.PMD_BASE_COUNT} | ${process.env.PMD_NEW_COUNT} |`);
+              bodyLines.push(`| SpotBugs | ${process.env.SPOTBUGS_COUNT} | ${process.env.SPOTBUGS_BASE_COUNT} | ${process.env.SPOTBUGS_NEW_COUNT} |`);
+              bodyLines.push(`| Total | ${process.env.TOTAL_COUNT} | - | ${process.env.TOTAL_NEW_COUNT} |`);
+            } else {
+              bodyLines.push('');
+              bodyLines.push('| Tool | Findings |');
+              bodyLines.push('| --- | ---: |');
+              bodyLines.push(`| Checkstyle | ${process.env.CHECKSTYLE_COUNT} |`);
+              bodyLines.push(`| PMD | ${process.env.PMD_COUNT} |`);
+              bodyLines.push(`| SpotBugs | ${process.env.SPOTBUGS_COUNT} |`);
+              bodyLines.push(`| Total | ${process.env.TOTAL_COUNT} |`);
+            }
+
+            const body = bodyLines.join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
 
       - name: Enforce quality thresholds
         env:
