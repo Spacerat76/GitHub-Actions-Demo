@@ -29,6 +29,7 @@
 	<properties>
 		<java.version>21</java.version>
 		<jacoco.version>0.8.13</jacoco.version>
+		<checkstyle.version>3.6.0</checkstyle.version>
 		<pmd.version>3.28.0</pmd.version>
 		<spotbugs.version>4.9.3.0</spotbugs.version>
 	</properties>
@@ -78,6 +79,19 @@
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-checkstyle-plugin</artifactId>
+				<version>${checkstyle.version}</version>
+				<configuration>
+					<configLocation>${project.basedir}/config/checkstyle/checkstyle.xml</configLocation>
+					<includeTestSourceDirectory>false</includeTestSourceDirectory>
+					<outputFile>${project.build.directory}/checkstyle-result.xml</outputFile>
+					<outputFileFormat>xml</outputFileFormat>
+					<consoleOutput>true</consoleOutput>
+					<failOnViolation>false</failOnViolation>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-pmd-plugin</artifactId>
 				<version>${pmd.version}</version>
 				<configuration>
@@ -96,7 +110,7 @@
 				<configuration>
 					<effort>Max</effort>
 					<threshold>Medium</threshold>
-					<failOnError>true</failOnError>
+					<failOnError>false</failOnError>
 					<xmlOutput>true</xmlOutput>
 				</configuration>
 			</plugin>

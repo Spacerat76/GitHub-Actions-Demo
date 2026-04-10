@@ -16,7 +16,9 @@ Dieses Repository nutzt mehrere GitHub-Actions-Checks als schlanken Ersatz fuer 
 
 - `build (ubuntu-latest)` und `build (windows-latest)` bauen und testen die Anwendung auf beiden Plattformen.
 - `coverage` erzeugt JaCoCo-Coverage, prueft Mindestwerte und kommentiert die Werte in Pull Requests.
-- `quality` fuehrt PMD und SpotBugs aus, um typische Code-Smells, Best-Practice-Verletzungen und statische Fehlerbilder zu finden.
+- `quality` fuehrt Checkstyle, PMD und SpotBugs aus. In Pull Requests blockieren nur neue Findings gegen den Basis-Branch.
+- `dependency-review` prueft neu eingefuehrte Abhaengigkeiten auf bekannte Risiken.
+- Dependabot erstellt regelmaessig Update-Pull-Requests fuer Maven-Abhaengigkeiten und GitHub Actions.
 - `analyze (java-kotlin)` fuehrt CodeQL aus und sucht nach Security- und Dataflow-Problemen.
 
 Alle diese Checks sind fuer Pull Requests nach `main` als Pflicht-Checks hinterlegt.
