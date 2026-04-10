@@ -385,51 +385,51 @@ jobs:
                   counter.attrib['type']: (int(counter.attrib['missed']), int(counter.attrib['covered']))
                   for counter in report.findall('counter')
               }
-            source_lines = {}
+              source_lines = {}
 
-            for package in report.findall('package'):
-              package_name = package.attrib.get('name', '')
-              for sourcefile in package.findall('sourcefile'):
-                relative_path = f"{package_name}/{sourcefile.attrib['name']}" if package_name else sourcefile.attrib['name']
-                source_lines[relative_path] = {
-                  int(line.attrib['nr']): {
-                    'missed_instructions': int(line.attrib.get('mi', '0')),
-                    'covered_instructions': int(line.attrib.get('ci', '0')),
-                  }
-                  for line in sourcefile.findall('line')
-                }
+              for package in report.findall('package'):
+                  package_name = package.attrib.get('name', '')
+                  for sourcefile in package.findall('sourcefile'):
+                      relative_path = f"{package_name}/{sourcefile.attrib['name']}" if package_name else sourcefile.attrib['name']
+                      source_lines[relative_path] = {
+                          int(line.attrib['nr']): {
+                              'missed_instructions': int(line.attrib.get('mi', '0')),
+                              'covered_instructions': int(line.attrib.get('ci', '0')),
+                          }
+                          for line in sourcefile.findall('line')
+                      }
 
               def ratio(counter_name):
                   missed, covered = counters[counter_name]
                   total = missed + covered
                   return 0.0 if total == 0 else covered / total
 
-            return ratio('LINE'), ratio('BRANCH'), source_lines
+              return ratio('LINE'), ratio('BRANCH'), source_lines
 
           def changed_lines_against_base(current_root, base_root):
-            changed = {}
-            if not current_root.exists():
+              changed = {}
+              if not current_root.exists():
+                  return changed
+
+              for current_file in current_root.rglob('*.java'):
+                  relative_path = current_file.relative_to(current_root).as_posix()
+                  base_file = base_root / relative_path
+                  current_lines = current_file.read_text(encoding='utf-8').splitlines()
+                  base_lines = base_file.read_text(encoding='utf-8').splitlines() if base_file.exists() else []
+
+                  if current_lines == base_lines:
+                      continue
+
+                  matcher = difflib.SequenceMatcher(a=base_lines, b=current_lines, autojunk=False)
+                  line_numbers = set()
+                  for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+                      if tag in ('replace', 'insert'):
+                          line_numbers.update(range(j1 + 1, j2 + 1))
+
+                  if line_numbers:
+                      changed[relative_path] = line_numbers
+
               return changed
-
-            for current_file in current_root.rglob('*.java'):
-              relative_path = current_file.relative_to(current_root).as_posix()
-              base_file = base_root / relative_path
-              current_lines = current_file.read_text(encoding='utf-8').splitlines()
-              base_lines = base_file.read_text(encoding='utf-8').splitlines() if base_file.exists() else []
-
-              if current_lines == base_lines:
-                continue
-
-              matcher = difflib.SequenceMatcher(a=base_lines, b=current_lines, autojunk=False)
-              line_numbers = set()
-              for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-                if tag in ('replace', 'insert'):
-                  line_numbers.update(range(j1 + 1, j2 + 1))
-
-              if line_numbers:
-                changed[relative_path] = line_numbers
-
-            return changed
 
           def format_pp(delta):
               return f'{delta * 100:+.2f} pp'
@@ -444,7 +444,7 @@ jobs:
           base_line_ratio = None
           base_branch_ratio = None
           if base_available:
-            base_line_ratio, base_branch_ratio, _ = read_report(base_report_path)
+              base_line_ratio, base_branch_ratio, _ = read_report(base_report_path)
 
           diff_available = False
           diff_ratio = None
@@ -452,25 +452,25 @@ jobs:
           diff_total_lines = 0
           diff_examples = []
           if base_available:
-            changed_lines = changed_lines_against_base(Path('src/main/java'), Path('base/src/main/java'))
-            for relative_path, line_numbers in changed_lines.items():
-              coverage_by_line = source_lines.get(relative_path, {})
-              executable_changed_lines = [
-                line_number
-                for line_number in sorted(line_numbers)
-                if line_number in coverage_by_line
-                and coverage_by_line[line_number]['missed_instructions'] + coverage_by_line[line_number]['covered_instructions'] > 0
-              ]
-              for line_number in executable_changed_lines:
-                diff_total_lines += 1
-                if coverage_by_line[line_number]['covered_instructions'] > 0:
-                  diff_covered_lines += 1
-                elif len(diff_examples) < 5:
-                  diff_examples.append(f'{relative_path}:{line_number}')
+              changed_lines = changed_lines_against_base(Path('src/main/java'), Path('base/src/main/java'))
+              for relative_path, line_numbers in changed_lines.items():
+                  coverage_by_line = source_lines.get(relative_path, {})
+                  executable_changed_lines = [
+                      line_number
+                      for line_number in sorted(line_numbers)
+                      if line_number in coverage_by_line
+                      and coverage_by_line[line_number]['missed_instructions'] + coverage_by_line[line_number]['covered_instructions'] > 0
+                  ]
+                  for line_number in executable_changed_lines:
+                      diff_total_lines += 1
+                      if coverage_by_line[line_number]['covered_instructions'] > 0:
+                          diff_covered_lines += 1
+                      elif len(diff_examples) < 5:
+                          diff_examples.append(f'{relative_path}:{line_number}')
 
-            if diff_total_lines > 0:
-              diff_available = True
-              diff_ratio = diff_covered_lines / diff_total_lines
+              if diff_total_lines > 0:
+                  diff_available = True
+                  diff_ratio = diff_covered_lines / diff_total_lines
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               handle.write(f'line_ratio={line_ratio:.4f}\n')
@@ -479,16 +479,16 @@ jobs:
               handle.write(f'branch_ratio_pct={branch_ratio:.2%}\n')
               handle.write(f'line_min_pct={line_min:.0%}\n')
               handle.write(f'branch_min_pct={branch_min:.0%}\n')
-            handle.write(f'diff_min_pct={diff_line_min:.0%}\n')
+              handle.write(f'diff_min_pct={diff_line_min:.0%}\n')
               handle.write(f'base_available={str(base_available).lower()}\n')
-            handle.write(f'diff_available={str(diff_available).lower()}\n')
-            handle.write(f'diff_covered_lines={diff_covered_lines}\n')
-            handle.write(f'diff_total_lines={diff_total_lines}\n')
-            handle.write(f'diff_examples={"; ".join(diff_examples)}\n')
+              handle.write(f'diff_available={str(diff_available).lower()}\n')
+              handle.write(f'diff_covered_lines={diff_covered_lines}\n')
+              handle.write(f'diff_total_lines={diff_total_lines}\n')
+              handle.write(f'diff_examples={"; ".join(diff_examples)}\n')
 
-            if diff_available and diff_ratio is not None:
-              handle.write(f'diff_ratio={diff_ratio:.4f}\n')
-              handle.write(f'diff_ratio_pct={diff_ratio:.2%}\n')
+              if diff_available and diff_ratio is not None:
+                  handle.write(f'diff_ratio={diff_ratio:.4f}\n')
+                  handle.write(f'diff_ratio_pct={diff_ratio:.2%}\n')
 
               if base_available:
                   handle.write(f'base_line_ratio_pct={base_line_ratio:.2%}\n')
@@ -508,14 +508,14 @@ jobs:
                   handle.write(
                       f'| Branch | {branch_ratio:.2%} | {base_branch_ratio:.2%} | {format_pp(branch_ratio - base_branch_ratio)} | {branch_min:.0%} |\n'
                   )
-                    handle.write('\n')
-                    if diff_available and diff_ratio is not None:
+                  handle.write('\n')
+                  if diff_available and diff_ratio is not None:
                       handle.write('| Diff Metric | Coverage | Covered Lines | Total Changed Lines | Minimum |\n')
                       handle.write('| --- | ---: | ---: | ---: | ---: |\n')
                       handle.write(
-                        f'| Changed executable lines | {diff_ratio:.2%} | {diff_covered_lines} | {diff_total_lines} | {diff_line_min:.0%} |\n'
+                          f'| Changed executable lines | {diff_ratio:.2%} | {diff_covered_lines} | {diff_total_lines} | {diff_line_min:.0%} |\n'
                       )
-                    else:
+                  else:
                       handle.write('No executable changed lines detected for diff coverage.\n')
               else:
                   handle.write('| Metric | Coverage | Minimum |\n')
