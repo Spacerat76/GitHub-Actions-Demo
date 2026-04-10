@@ -15,7 +15,7 @@ Verwendete Basis:
 Dieses Repository nutzt mehrere GitHub-Actions-Checks als schlanken Ersatz fuer ein groesseres SonarQube-Setup:
 
 - `build (ubuntu-latest)` und `build (windows-latest)` bauen und testen die Anwendung auf beiden Plattformen.
-- `coverage` erzeugt JaCoCo-Coverage, prueft Mindestwerte und kommentiert die Werte in Pull Requests.
+- `coverage` erzeugt JaCoCo-Coverage, prueft Gesamt- und Diff-Coverage fuer geaenderten Code und kommentiert die Werte in Pull Requests.
 - `quality` fuehrt Checkstyle, PMD und SpotBugs aus. In Pull Requests blockieren nur neue Findings gegen den Basis-Branch.
 - `dependency-review` prueft neu eingefuehrte Abhaengigkeiten auf bekannte Risiken.
 - Dependabot erstellt regelmaessig Update-Pull-Requests fuer Maven-Abhaengigkeiten und GitHub Actions.
