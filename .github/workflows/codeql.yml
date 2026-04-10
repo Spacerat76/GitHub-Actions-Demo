@@ -13,6 +13,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: write
   security-events: write
 
 jobs:
@@ -51,3 +52,127 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
+
+      - name: Comment CodeQL results on pull request
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const marker = '<!-- codeql-report -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            const buildCommentBody = async () => {
+              try {
+                const [analyses, alerts] = await Promise.all([
+                  github.paginate('GET /repos/{owner}/{repo}/code-scanning/analyses', {
+                    owner,
+                    repo,
+                    pr: issue_number,
+                    tool_name: 'CodeQL',
+                    per_page: 100,
+                  }),
+                  github.paginate('GET /repos/{owner}/{repo}/code-scanning/alerts', {
+                    owner,
+                    repo,
+                    pr: issue_number,
+                    tool_name: 'CodeQL',
+                    per_page: 100,
+                  }),
+                ]);
+
+                const latestAnalysis = analyses[0];
+                const openAlerts = alerts.filter((alert) => alert.state === 'open');
+                const severityRank = { critical: 0, high: 1, medium: 2, low: 3, warning: 4, note: 5, error: 6 };
+                openAlerts.sort((left, right) => {
+                  const leftSeverity = left.rule.security_severity_level || left.rule.severity || 'note';
+                  const rightSeverity = right.rule.security_severity_level || right.rule.severity || 'note';
+                  return (severityRank[leftSeverity] ?? 99) - (severityRank[rightSeverity] ?? 99);
+                });
+
+                const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+                for (const alert of openAlerts) {
+                  const severity = (alert.rule.security_severity_level || alert.rule.severity || 'low').toLowerCase();
+                  if (Object.hasOwn(counts, severity)) {
+                    counts[severity] += 1;
+                  }
+                }
+
+                const bodyLines = [marker, '## CodeQL', '', `Status: ${openAlerts.length === 0 ? 'Passed' : 'Failed'}`];
+
+                if (latestAnalysis) {
+                  bodyLines.push(
+                    `Analysis scope: ${latestAnalysis.tool.name} ran ${latestAnalysis.rules_count} rules and produced ${latestAnalysis.results_count} results.`
+                  );
+                }
+
+                bodyLines.push('');
+
+                if (openAlerts.length === 0) {
+                  bodyLines.push('No open CodeQL alerts were reported for this pull request.');
+                } else {
+                  bodyLines.push(
+                    `Open alerts: critical ${counts.critical}, high ${counts.high}, medium ${counts.medium}, low ${counts.low}.`
+                  );
+                  bodyLines.push('');
+                  bodyLines.push('| Severity | Rule | Location |');
+                  bodyLines.push('| --- | --- | --- |');
+
+                  for (const alert of openAlerts.slice(0, 5)) {
+                    const severity = (alert.rule.security_severity_level || alert.rule.severity || 'note').toLowerCase();
+                    const location = alert.most_recent_instance?.location;
+                    const locationText = location
+                      ? `${location.path}:${location.start_line}`
+                      : 'n/a';
+                    const ruleName = alert.rule.description || alert.rule.name || alert.rule.id;
+                    bodyLines.push(
+                      `| ${severity} | [${ruleName}](${alert.html_url}) | ${locationText} |`
+                    );
+                  }
+
+                  if (openAlerts.length > 5) {
+                    bodyLines.push('');
+                    bodyLines.push(`...and ${openAlerts.length - 5} more open CodeQL alerts.`);
+                  }
+                }
+
+                return bodyLines.join('\n');
+              } catch (error) {
+                return [
+                  marker,
+                  '## CodeQL',
+                  '',
+                  'Status: Unavailable',
+                  '',
+                  `CodeQL results could not be summarized automatically: ${error.message}`,
+                ].join('\n');
+              }
+            };
+
+            const body = await buildCommentBody();
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
