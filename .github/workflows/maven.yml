@@ -53,6 +53,9 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -70,7 +73,8 @@ jobs:
           chmod +x mvnw
           ./mvnw --batch-mode verify
 
-      - name: Publish coverage summary
+      - name: Extract coverage metrics
+        id: coverage_metrics
         run: |
           python3 <<'PY'
           import os
@@ -92,6 +96,14 @@ jobs:
           line_min = float(os.environ['COVERAGE_LINE_MIN'])
           branch_min = float(os.environ['COVERAGE_BRANCH_MIN'])
 
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              handle.write(f'line_ratio={line_ratio:.4f}\n')
+              handle.write(f'branch_ratio={branch_ratio:.4f}\n')
+              handle.write(f'line_ratio_pct={line_ratio:.2%}\n')
+              handle.write(f'branch_ratio_pct={branch_ratio:.2%}\n')
+              handle.write(f'line_min_pct={line_min:.0%}\n')
+              handle.write(f'branch_min_pct={branch_min:.0%}\n')
+
           summary = os.environ['GITHUB_STEP_SUMMARY']
           with open(summary, 'a', encoding='utf-8') as handle:
               handle.write('## Code Coverage\n\n')
@@ -99,6 +111,70 @@ jobs:
               handle.write('| --- | ---: | ---: |\n')
               handle.write(f'| Line | {line_ratio:.2%} | {line_min:.0%} |\n')
               handle.write(f'| Branch | {branch_ratio:.2%} | {branch_min:.0%} |\n')
+          PY
+
+      - name: Comment coverage on pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v9
+        env:
+          LINE_RATIO_PCT: ${{ steps.coverage_metrics.outputs.line_ratio_pct }}
+          BRANCH_RATIO_PCT: ${{ steps.coverage_metrics.outputs.branch_ratio_pct }}
+          LINE_MIN_PCT: ${{ steps.coverage_metrics.outputs.line_min_pct }}
+          BRANCH_MIN_PCT: ${{ steps.coverage_metrics.outputs.branch_min_pct }}
+        with:
+          script: |
+            const marker = '<!-- coverage-report -->';
+            const body = [
+              marker,
+              '## Code Coverage',
+              '',
+              '| Metric | Coverage | Minimum |',
+              '| --- | ---: | ---: |',
+              `| Line | ${process.env.LINE_RATIO_PCT} | ${process.env.LINE_MIN_PCT} |`,
+              `| Branch | ${process.env.BRANCH_RATIO_PCT} | ${process.env.BRANCH_MIN_PCT} |`
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Enforce coverage thresholds
+        env:
+          LINE_RATIO: ${{ steps.coverage_metrics.outputs.line_ratio }}
+          BRANCH_RATIO: ${{ steps.coverage_metrics.outputs.branch_ratio }}
+        run: |
+          python3 <<'PY'
+          import os
+
+          line_ratio = float(os.environ['LINE_RATIO'])
+          branch_ratio = float(os.environ['BRANCH_RATIO'])
+          line_min = float(os.environ['COVERAGE_LINE_MIN'])
+          branch_min = float(os.environ['COVERAGE_BRANCH_MIN'])
 
           if line_ratio < line_min or branch_ratio < branch_min:
               raise SystemExit(
