@@ -65,37 +65,190 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Run static quality checks
+      - name: Run static quality reports
         run: |
           chmod +x mvnw
-          ./mvnw --batch-mode -DskipTests compile pmd:pmd spotbugs:spotbugs pmd:check spotbugs:check
+          ./mvnw --batch-mode -DskipTests compile checkstyle:checkstyle pmd:pmd spotbugs:spotbugs
+
+      - name: Check out base branch for quality comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: quality-base
+
+      - name: Run base branch quality reports
+        if: github.event_name == 'pull_request'
+        working-directory: quality-base
+        run: |
+          chmod +x mvnw
+          ./mvnw --batch-mode -DskipTests compile checkstyle:checkstyle pmd:pmd spotbugs:spotbugs
+
+      - name: Extract quality metrics
+        id: quality_metrics
+        run: |
+          python3 <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          PMD_NS = {'p': 'http://pmd.sourceforge.net/report/2.0.0'}
+
+          def normalize_path(path_value):
+              normalized = (path_value or 'unknown').replace('\\', '/')
+              markers = ['/src/main/java/', '/src/test/java/', '/target/generated-sources/annotations/']
+              for marker in markers:
+                  if marker in normalized:
+                      return normalized.split(marker, 1)[1]
+              return normalized
+
+          def parse_checkstyle(report_path):
+              if not report_path.exists():
+                  return set()
+              root = ET.parse(report_path).getroot()
+              findings = set()
+              for file_node in root.findall('file'):
+                  relative_path = normalize_path(file_node.attrib.get('name'))
+                  for error in file_node.findall('error'):
+                      findings.add((
+                          relative_path,
+                          error.attrib.get('source', ''),
+                          error.attrib.get('line', '0'),
+                          error.attrib.get('message', ''),
+                      ))
+              return findings
+
+          def parse_pmd(report_path):
+              if not report_path.exists():
+                  return set()
+              root = ET.parse(report_path).getroot()
+              findings = set()
+              for file_node in root.findall('p:file', PMD_NS):
+                  relative_path = normalize_path(file_node.attrib.get('name'))
+                  for violation in file_node.findall('p:violation', PMD_NS):
+                      findings.add((
+                          relative_path,
+                          violation.attrib.get('rule', ''),
+                          violation.attrib.get('beginline', '0'),
+                          ' '.join((violation.text or '').split()),
+                      ))
+              return findings
+
+          def parse_spotbugs(report_path):
+              if not report_path.exists():
+                  return set()
+              root = ET.parse(report_path).getroot()
+              findings = set()
+              for bug in root.findall('BugInstance'):
+                  class_node = bug.find('Class')
+                  source_line = bug.find('SourceLine')
+                  if source_line is None and class_node is not None:
+                      source_line = class_node.find('SourceLine')
+
+                  relative_path = normalize_path(
+                      source_line.attrib.get('sourcepath') if source_line is not None else class_node.attrib.get('classname', '')
+                  )
+                  findings.add((
+                      relative_path,
+                      bug.attrib.get('type', ''),
+                      source_line.attrib.get('start', '0') if source_line is not None else '0',
+                      bug.attrib.get('category', ''),
+                  ))
+              return findings
+
+          def collect_reports(base_dir):
+              base = Path(base_dir)
+              return {
+                  'checkstyle': parse_checkstyle(base / 'target/checkstyle-result.xml'),
+                  'pmd': parse_pmd(base / 'target/pmd.xml'),
+                  'spotbugs': parse_spotbugs(base / 'target/spotbugsXml.xml'),
+              }
+
+          current = collect_reports('.')
+          base_reports = collect_reports('quality-base')
+          base_available = Path('quality-base/target').exists()
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              handle.write(f'base_available={str(base_available).lower()}\n')
+              total_new = 0
+              total_current = 0
+              total_base = 0
+
+              for tool in ('checkstyle', 'pmd', 'spotbugs'):
+                  current_count = len(current[tool])
+                  base_count = len(base_reports[tool]) if base_available else 0
+                  new_count = len(current[tool] - base_reports[tool]) if base_available else current_count
+                  total_current += current_count
+                  total_base += base_count
+                  total_new += new_count
+                  handle.write(f'{tool}_count={current_count}\n')
+                  handle.write(f'{tool}_base_count={base_count}\n')
+                  handle.write(f'{tool}_new_count={new_count}\n')
+
+              handle.write(f'total_count={total_current}\n')
+              handle.write(f'total_base_count={total_base}\n')
+              handle.write(f'total_new_count={total_new}\n')
+          PY
 
       - name: Publish quality summary
         if: always()
+        env:
+          BASE_AVAILABLE: ${{ steps.quality_metrics.outputs.base_available }}
+          CHECKSTYLE_COUNT: ${{ steps.quality_metrics.outputs.checkstyle_count }}
+          CHECKSTYLE_BASE_COUNT: ${{ steps.quality_metrics.outputs.checkstyle_base_count }}
+          CHECKSTYLE_NEW_COUNT: ${{ steps.quality_metrics.outputs.checkstyle_new_count }}
+          PMD_COUNT: ${{ steps.quality_metrics.outputs.pmd_count }}
+          PMD_BASE_COUNT: ${{ steps.quality_metrics.outputs.pmd_base_count }}
+          PMD_NEW_COUNT: ${{ steps.quality_metrics.outputs.pmd_new_count }}
+          SPOTBUGS_COUNT: ${{ steps.quality_metrics.outputs.spotbugs_count }}
+          SPOTBUGS_BASE_COUNT: ${{ steps.quality_metrics.outputs.spotbugs_base_count }}
+          SPOTBUGS_NEW_COUNT: ${{ steps.quality_metrics.outputs.spotbugs_new_count }}
         run: |
           python3 <<'PY'
+          import os
           from pathlib import Path
-          import xml.etree.ElementTree as ET
 
-          def pmd_violations(path):
-              if not path.exists():
-                  return 'n/a'
-              root = ET.parse(path).getroot()
-              return str(len(root.findall('.//violation')))
+          summary = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          base_available = os.environ['BASE_AVAILABLE'] == 'true'
+          tools = ('checkstyle', 'pmd', 'spotbugs')
 
-          def spotbugs_violations(path):
-              if not path.exists():
-                  return 'n/a'
-              root = ET.parse(path).getroot()
-              return root.attrib.get('total_bugs', '0')
-
-          summary = Path(__import__('os').environ['GITHUB_STEP_SUMMARY'])
           with summary.open('a', encoding='utf-8') as handle:
               handle.write('## Static Quality Checks\n\n')
-              handle.write('| Tool | Findings |\n')
-              handle.write('| --- | ---: |\n')
-              handle.write(f'| PMD | {pmd_violations(Path("target/pmd.xml"))} |\n')
-              handle.write(f'| SpotBugs | {spotbugs_violations(Path("target/spotbugsXml.xml"))} |\n')
+              if base_available:
+                  handle.write('Only new findings compared with the base branch fail this check on pull requests.\n\n')
+                  handle.write('| Tool | PR Findings | Base Findings | New Findings |\n')
+                  handle.write('| --- | ---: | ---: | ---: |\n')
+                  for tool in tools:
+                      name = 'Checkstyle' if tool == 'checkstyle' else ('PMD' if tool == 'pmd' else 'SpotBugs')
+                      handle.write(
+                          f'| {name} | {os.environ[tool.upper() + "_COUNT"]} | {os.environ[tool.upper() + "_BASE_COUNT"]} | {os.environ[tool.upper() + "_NEW_COUNT"]} |\n'
+                      )
+              else:
+                  handle.write('| Tool | Findings |\n')
+                  handle.write('| --- | ---: |\n')
+                  for tool in tools:
+                      name = 'Checkstyle' if tool == 'checkstyle' else ('PMD' if tool == 'pmd' else 'SpotBugs')
+                      handle.write(f'| {name} | {os.environ[tool.upper() + "_COUNT"]} |\n')
+          PY
+
+      - name: Enforce quality thresholds
+        env:
+          BASE_AVAILABLE: ${{ steps.quality_metrics.outputs.base_available }}
+          TOTAL_COUNT: ${{ steps.quality_metrics.outputs.total_count }}
+          TOTAL_NEW_COUNT: ${{ steps.quality_metrics.outputs.total_new_count }}
+        run: |
+          python3 <<'PY'
+          import os
+
+          base_available = os.environ['BASE_AVAILABLE'] == 'true'
+          total_count = int(os.environ['TOTAL_COUNT'])
+          total_new_count = int(os.environ['TOTAL_NEW_COUNT'])
+
+          if base_available:
+              if total_new_count > 0:
+                  raise SystemExit(f'New static quality findings introduced: {total_new_count}')
+          elif total_count > 0:
+              raise SystemExit(f'Static quality findings present on the branch: {total_count}')
           PY
 
   coverage:
